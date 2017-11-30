@@ -165,22 +165,86 @@ int main(int argc, char **argv)
 */
 void eval(char *cmdline)
 {
-    char *args;     //arugment list
-    int bg;         //bg/fg indicator
-    pid_t pid;      //process id
-    sigset_t mask;  //mask to block signals
+    char **argv[MAXARGS];       //arugment list
+    int bg;                     //background/foreground indicator
+    pid_t pid;                  //process id
+    sigset_t mask;              //mask to block signals
 
     //parse the line, then determine if it is a builtin
+    bg = parseline(cmdline,argv);
 
-    //blocking SIGCHILD signals to avoid race
+    if(!builtin_cmd(argv))
+    {
 
-    //Forking
+        //blocking SIGCHILD signals to avoid race
+        // if
+        if(sigemptyset(&mask) != 0)
+        {
+            unix_error("sigemptyset error");
+        }
+        if(sigaddset(&mask, SIGCHLD) != 0)
+        {
+            unix_error("sigaddset error");
+        }
+        if(sigprocmask(SIG_BLOCK,&mask,NULL) != 0)
+        {
+            unix_error("sigprocmask error");
+        }
+        //assign value to pid and check if child creation was unsuccessful
+        //pid < 0 if creation of child process was unsuccessful
+        //else
+        //pid == 0 if successful
+        //fork() returns process ID to parent
+        if((pid = fork()) < 0)
+        {
+            unix_error("fork error");
+        }
 
-    //Child- unblock mask, set new process group, run command
+        //Child- unblock mask, set new process group, run command
+        else if(pid == 0)
+        {
+            // check for sigprocmask error
+            if(sigprocmask(SIG_BLOCK,&mask,NULL) != 0)
+            {
+                unix_error("sigprocmask error");
+            }
+            // check for setpgid error
+            if(setpgid(0,0) < 0){
+                unix_error("setpgid error");
+            }
+            // check if command is valid
+            if(execvp(argv[0],argv) < 0)
+            {
+                printf("%s: command not found\n", argv[0]);
+                exit(1);
+            }
 
-    //Parent- add job to list, unblock signal, then do job
+        }
+        //Parent- add job to list, unblock signal, then do job
+        else
+        {
+            //if foreground addjob with FG
+            if(bg == 0)
+            {
+                addjob(jobs,pid,FG,cmdline);
+            }
+            //else background addjob with BG
+            else
+            {
+                addjob(jobs,pid,BG,cmdline);
+            }
+            //Test for a fg job
+            if(!bg)
+            {
+                waitfg(pid);
+            }
+            else
+            {
+                printf("[%d] (%d) %s", pid2jid(pid), pid, cmdline);
+            }
+        }
 
-    //Test for a fg job
+    }
     return;
 }
 
@@ -247,6 +311,24 @@ int parseline(const char *cmdline, char **argv)
  */
 int builtin_cmd(char **argv)
 {
+    if(strcmp("quit",argv[0]) == 0)
+    {
+        exit(0); // ?
+    }
+    if(strcmp("jobs", argv[0]) == 0)
+    {
+        listjobs(jobs);
+        return(1);
+    }
+    if(strcmp("bg", argv[0]) == 0 || strcmp("fg", argv[0]) == 0)
+    {
+        do_bgfg(argv);
+        return(1);
+    }
+    if(strcmp("&", argv[0]) == 0)
+    {
+        return(1);
+    }
     return 0;     /* not a builtin command */
 }
 
